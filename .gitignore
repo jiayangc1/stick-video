@@ -1,0 +1,7 @@
+.DS_Store
+node_modules/
+.env
+
+# generated media (character sheet is a tracked reference asset)
+out/*
+!out/character-sheet.png
