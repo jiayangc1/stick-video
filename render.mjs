@@ -45,12 +45,19 @@ const fadeIn = (i) => i > 0 && (chapterStarts.has(beats[i].id) || timeSkip(beats
 const fadeOut = (i) => i < beats.length - 1 && fadeIn(i + 1);
 
 await mkdir('out/build', { recursive: true });
-const durs = await Promise.all(beats.map((b) => duration(`out/audio/vo/${pad(b.id)}.mp3`).then((d) => d + PAD)));
+const vo = await Promise.all(beats.map((b) => duration(`out/audio/vo/${pad(b.id)}.mp3`)));
+const clipDurs = await Promise.all(beats.map(async (b) => {
+  const clip = `out/clips/${pad(b.id)}.mp4`;
+  return b.motion === 'animate' && await exists(clip) ? duration(clip) : 0;
+}));
+// Veo clips play at up to 2x so the action fits; if still longer than the VO, the beat holds in silence.
+const MAX_SPEED = 2;
+const durs = vo.map((d, i) => Math.max(d + PAD, clipDurs[i] / MAX_SPEED));
 
 async function renderBeat(i) {
   const b = beats[i], id = pad(b.id), dur = durs[i], frames = Math.round(dur * FPS);
   const clip = `out/clips/${id}.mp4`;
-  const useClip = b.motion === 'animate' && await exists(clip);
+  const useClip = clipDurs[i] > 0;
 
   const fades = [
     fadeIn(i) && `fade=t=in:st=0:d=${FADE}`,
@@ -59,9 +66,10 @@ async function renderBeat(i) {
 
   let input, video;
   if (useClip) {
-    // Veo clip: fit to 1080p, hold the last frame if it is shorter than the VO.
-    input = ['-i', clip];
-    video = `scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=${FPS},tpad=stop_mode=clone:stop_duration=${dur}`;
+    // Veo clip: retime to the beat, fit to 1080p, hold the last frame if it is still short.
+    input = ['-an', '-i', clip];
+    const stretch = Math.min(1, dur / clipDurs[i]);
+    video = `setpts=${stretch.toFixed(4)}*PTS,scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=${FPS},tpad=stop_mode=clone:stop_duration=${dur}`;
   } else {
     // Stills (and animate beats without a clip yet, as zoom_in): move at 2x resolution, then output 1080p.
     const m = moves[b.motion] ?? moves.zoom_in;
@@ -100,7 +108,7 @@ beats.forEach((b, i) => {
   const words = b.narration.split(/\s+/);
   const chunks = [];
   for (let w = 0; w < words.length; w += 7) chunks.push(words.slice(w, w + 7));
-  const speech = durs[i] - PAD;
+  const speech = vo[i];
   let t = starts[i];
   for (const c of chunks) {
     const len = speech * (c.length / words.length);
